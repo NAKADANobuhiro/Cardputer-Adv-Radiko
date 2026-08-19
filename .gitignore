@@ -1,0 +1,17 @@
+# PlatformIO build output / caches
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# VS Code (keep nothing machine-specific)
+.vscode/
+!.vscode/extensions.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+
+# 秘密情報をコミットしないための注意:
+#  config.h に Wi-Fi パスワード等を直書きした場合は、公開前に必ず消すこと。
+#  （既定では空。実機の w キー設定→本体NVS保存の運用を推奨）
