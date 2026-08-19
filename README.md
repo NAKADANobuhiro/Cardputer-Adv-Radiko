@@ -1,4 +1,4 @@
-# Cardputer-Adv-Radiko
+# CardputerRadiko
 
 M5Stack **Cardputer ADV**（ESP32-S3 / ES8311）を、電源を入れるだけで [radiko](https://radiko.jp/) が聴ける **専用ラジオ受信機**にするファームウェアです。起動すると Wi-Fi 接続 → radiko 認証 → 自動再生。キーボードで選局・音量・Wi-Fi 設定ができます。
 
@@ -143,7 +143,11 @@ radiko の API は年に一度ほど変更されることがあります。動�
 
 ## ライセンス
 
-本プロジェクトは AAC デコードに [pschatzmann/arduino-libhelix](https://github.com/pschatzmann/arduino-libhelix)（**GPLv3**）を利用しています。これをリンクした配布物は GPLv3 の対象となるため、**リポジトリのライセンスは GPLv3 を推奨**します（`LICENSE` ファイルを追加してください）。M5Unified / M5GFX は MIT です。
+本リポジトリのソースコードは **MIT License**（[LICENSE](LICENSE)）です。
+
+ただし AAC デコードにビルド時リンクする [pschatzmann/arduino-libhelix](https://github.com/pschatzmann/arduino-libhelix) は **GPLv3** です（本リポジトリには同梱していません）。そのため、**ビルドして生成したバイナリ（`.bin`）は GPLv3 の対象となる結合著作物**になります。バイナリを再配布する場合は GPLv3 に従ってください。ソースコードの配布であれば MIT のまま扱えます。
+
+依存ライブラリの一覧とライセンスは [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を参照してください。
 
 ---
 
