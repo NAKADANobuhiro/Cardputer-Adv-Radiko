@@ -6,6 +6,10 @@ M5Stack **Cardputer ADV**（ESP32-S3 / ES8311）を、電源を入れるだけ�
 
 **リポジトリ**: https://github.com/NAKADANobuhiro/Cardputer-Adv-Radiko
 
+![CardputerRadiko 動作中（TBSラジオ再生中。上段=Wi-Fi/エリア/時計/音量/電池、中央=局リスト、番組名、下段=状態＋キーヒント）](image.jpg)
+
+*実機で動作中の様子（神奈川エリア／TBSラジオ再生中。現在番組名・時計・バッテリ残量を表示）。*
+
 - **フレームワーク**: Arduino / PlatformIO（M5Cardputer ライブラリ）
 - **方式**: radiko 認証付き HLS(AAC) を取得 → Helix でデコード → ES8311 コーデックへ出力
 - **既定エリア**: 神奈川県（JP14）／**既定局**: TBSラジオ（どちらも変更可・後述）
