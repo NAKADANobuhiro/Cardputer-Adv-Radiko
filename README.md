@@ -6,7 +6,7 @@ M5Stack **Cardputer ADV**（ESP32-S3 / ES8311）を、電源を入れるだけ�
 
 **リポジトリ**: https://github.com/NAKADANobuhiro/Cardputer-Adv-Radiko
 
-![CardputerRadiko 動作中（TBSラジオ再生中。上段=Wi-Fi/エリア/時計/音量/電池、中央=局リスト、番組名、下段=状態＋キーヒント）](image.jpg)
+![CardputerRadiko 動作中（TBSラジオ再生中。上段=Wi-Fi/エリア/時計/音量/電池、中央=局リスト、番組名、下段=状態＋キーヒント）](image2.jpg)
 
 *実機で動作中の様子（神奈川エリア／TBSラジオ再生中。現在番組名・時計・バッテリ残量を表示）。*
 
