@@ -20,6 +20,12 @@ bool authenticate(String& tokenOut, String& areaOut);
 // 局IDからライブ配信の「マスター/メディア m3u8」URL を組み立てる。
 String buildPlaylistUrl(const String& stationId);
 
+// エリアの局一覧XMLのURL（認証不要）。例: JP14 → v3/station/list/JP14.xml
+String stationListUrl(const String& areaId);
+
+// 現在放送中の番組一覧XMLのURL（認証不要, 局ごとcurrent+next）。
+String nowProgramUrl(const String& areaId);
+
 // URL を GET して本文を body へ。token 非空なら X-Radiko-AuthToken を付与。
 //  戻り値: HTTPステータス（成功=200）。負値は接続失敗。
 int httpGetString(const String& url, const String& token, String& body,

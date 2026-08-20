@@ -51,6 +51,7 @@ static String           s_stationId = "";
 static String           s_token     = "";
 static String           s_area      = "";
 static String           s_msg       = "";
+static String           s_program   = "";   // 現在放送中の番組名(now.xmlから)
 static portMUX_TYPE     s_mux       = portMUX_INITIALIZER_UNLOCKED;
 
 // ---- 再生用スピーカーチャンネル ----
@@ -243,6 +244,85 @@ static String resolveUrl(const String& base, const String& ref) {
 }
 
 // ---------------------------------------------------------------------------
+//  現在番組名の取得（now.xml をストリーム解析）
+// ---------------------------------------------------------------------------
+static void setProgram(const String& t) {
+  portENTER_CRITICAL(&s_mux);
+  s_program = t;
+  portEXIT_CRITICAL(&s_mux);
+}
+
+// XMLエンティティ/CDATA を軽く整える
+static void tidyTitle(String& s) {
+  s.trim();
+  if (s.startsWith("<![CDATA[")) {
+    s = s.substring(9);
+    int e = s.indexOf("]]>");
+    if (e >= 0) s = s.substring(0, e);
+  }
+  s.replace("&amp;", "&");
+  s.replace("&lt;", "<");
+  s.replace("&gt;", ">");
+  s.replace("&quot;", "\"");
+  s.replace("&#39;", "'");
+  s.trim();
+}
+
+// now.xml を GET し、指定局の「最初の<title>(=現在番組)」を抜き出す。
+//  ※ メモリ節約のため getString せず、少量ずつ読みながら検索してヒットで打ち切る。
+//  ※ 呼び出し前に s_media を停止しておくこと（TLSを1本に保つ）。
+static bool fetchNowTitle(const String& stationId, const String& area, uint32_t gen, String& out) {
+  if (area.isEmpty()) return false;
+  String url = radiko::nowProgramUrl(area);
+  WiFiClientSecure cli;
+  cli.setInsecure();
+  HTTPClient http;
+  http.setReuse(false);
+  http.setTimeout(6000);
+  if (!http.begin(cli, url)) return false;
+  int code = http.GET();
+  if (code != 200) { LOG("[prog] HTTP %d\n", code); http.end(); return false; }
+
+  WiFiClient* st = http.getStreamPtr();
+  String needle = "<station id=\"" + stationId + "\"";
+  String buf; buf.reserve(4096);
+  char tmp[256];
+  bool inStation = false;
+  bool ok = false;
+  uint32_t t0 = millis();
+  while (true) {
+    int avail = st->available();
+    if (avail > 0) {
+      int n = st->readBytes(tmp, avail > (int)sizeof(tmp) ? (int)sizeof(tmp) : avail);
+      if (n > 0) buf.concat((const char*)tmp, n);
+      if (!inStation) {
+        int p = buf.indexOf(needle);
+        if (p >= 0) { inStation = true; buf.remove(0, p + needle.length()); }
+      }
+      if (inStation) {
+        int tp = buf.indexOf("<title>");
+        if (tp >= 0) {
+          int te = buf.indexOf("</title>", tp);
+          if (te >= 0) { out = buf.substring(tp + 7, te); ok = true; break; }
+        }
+        // 次局に達したのに title 無し → 諦める
+        if (buf.indexOf("<station id=\"") > 0) break;
+      }
+      // 肥大化防止（末尾だけ残して境界の取りこぼしを防ぐ）
+      if (buf.length() > 8192) buf.remove(0, buf.length() - 2048);
+    } else {
+      if (!http.connected() && st->available() == 0) break;
+      delay(3);
+    }
+    if (interrupted(gen)) { http.end(); return false; }
+    if (millis() - t0 > 6000) break;
+  }
+  http.end();
+  if (ok) tidyTitle(out);
+  return ok && out.length() > 0;
+}
+
+// ---------------------------------------------------------------------------
 //  1局ぶんの再生ループ（停止/局切替/認証切れで抜ける）
 // ---------------------------------------------------------------------------
 static void playStation(const String& stationId, uint32_t gen) {
@@ -253,6 +333,7 @@ static void playStation(const String& stationId, uint32_t gen) {
   long lastSeq = -1;
   int failStreak = 0;
   String chunkUrl = "";     // medialist URL をキャッシュ（404まで使い回し=マスター取得を減らす）
+  uint32_t nextProg = 0;    // 0=即時。FIFOが十分貯まった最初の機会に番組名を取得
 
   while (!interrupted(gen)) {
     // FIFO(先読みバッファ)に余裕ができるまで待つ（常に数秒ぶん先読み）
@@ -308,6 +389,20 @@ static void playStation(const String& stationId, uint32_t gen) {
         (unsigned)xStreamBufferBytesAvailable(s_fifo),
         (unsigned)s_spkUnder, (unsigned)s_fifoStarve, (unsigned)ESP.getFreeHeap());
     if (interrupted(gen)) break;
+
+    // 番組名の取得/更新。FIFOが3/4以上貯まっているときだけ実施し、取得中(≈1〜2s)の
+    //  ドレインで音が枯れないようにする。s_media を落として TLS を1本に保つ。
+    if (millis() >= nextProg &&
+        xStreamBufferBytesAvailable(s_fifo) >= (FIFO_BYTES * 3) / 4) {
+      s_media.stop();
+      String t;
+      if (fetchNowTitle(stationId, s_area, gen, t)) {
+        setProgram(t);
+        LOG("[prog] %s\n", t.c_str());
+      }
+      nextProg = millis() + PROG_REFRESH_MS;
+      if (interrupted(gen)) break;
+    }
     // 新セグメントが無い時だけ待つ（あれば即・上のFIFO空き待ちでペーシング）
     if (played == 0) delay(700);
   }
@@ -436,6 +531,7 @@ void play(const String& stationId) {
   s_stationId = stationId;
   s_gen++;                 // 進行中の再生を中断させる
   s_playing = true;
+  s_program = "";          // 前局の番組名をクリア（新局で取り直す）
   portEXIT_CRITICAL(&s_mux);
   s_flush = true;          // 先読みFIFOを捨てて新局で貯め直す
 }
@@ -444,11 +540,23 @@ void stop() {
   s_playing = false;
   s_gen++;
   s_flush = true;          // 残りの先読みを破棄
+  setProgram("");          // 番組名表示もクリア
   M5Cardputer.Speaker.stop();
+}
+
+void releaseNetwork() {
+  s_media.stop();          // メディアhostのTLSコンテキストを解放（約40KB）
 }
 
 State  state()   { return s_state; }
 String area()    { return s_area; }
 String message() { return s_msg; }
+String program() {
+  String p;
+  portENTER_CRITICAL(&s_mux);
+  p = s_program;
+  portEXIT_CRITICAL(&s_mux);
+  return p;
+}
 
 } // namespace player

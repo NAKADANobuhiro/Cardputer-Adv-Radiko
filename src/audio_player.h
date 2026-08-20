@@ -16,8 +16,10 @@ void   reserveSbrEarly();              // ★最優先で呼ぶ: SBR用50KBをhe
 void   begin();                        // 再生タスク生成（起動時に1回）
 void   play(const String& stationId);  // 指定局の再生を開始/切替
 void   stop();                         // 停止
+void   releaseNetwork();               // メディアTLSを解放（局リスト取得前にheapを空ける）
 State  state();                        // 現在の状態
 String area();                         // 直近認証で判明したエリア(例 JP14)
 String message();                      // UI表示用の短いステータス/エラー文
+String program();                      // 現在放送中の番組名(取得できていれば)
 
 } // namespace player

@@ -113,6 +113,14 @@ String buildPlaylistUrl(const String& stationId) {
   return url;
 }
 
+String stationListUrl(const String& areaId) {
+  return "https://radiko.jp/v3/station/list/" + areaId + ".xml";
+}
+
+String nowProgramUrl(const String& areaId) {
+  return "https://radiko.jp/v3/program/now/" + areaId + ".xml";
+}
+
 int httpGetString(const String& url, const String& token, String& body, uint32_t timeoutMs) {
   WiFiClientSecure client;
   client.setInsecure();

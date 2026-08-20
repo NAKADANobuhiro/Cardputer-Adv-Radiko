@@ -13,8 +13,18 @@
 
 // ----- 地域 / 初期選局 -----
 //  神奈川県(JP14)想定。エリアは接続元IPで自動判定されるので通常は表示用。
-#define RADIKO_AREA_ID        "JP14"     // 神奈川県
+#define RADIKO_AREA_ID        "JP14"     // 神奈川県（既定/表示用）
 #define DEFAULT_STATION_INDEX 0          // stations.h の並びで TBS を先頭(=0)に
+//  実機の A キーで選んだエリアの局リストは本体(NVS)に保存され次回以降そちらを使う。
+#define MAX_STATIONS          40         // 動的取得する局リストの上限
+
+// ----- 時計(NTP) -----
+#define NTP_SERVER1           "ntp.nict.jp"       // 日本標準時
+#define NTP_SERVER2           "time.google.com"
+#define JST_OFFSET_SEC        (9 * 3600)          // JST = UTC+9
+
+// ----- 現在番組名の再取得間隔 -----
+#define PROG_REFRESH_MS       300000    // 5分ごとに now.xml から番組名を更新
 
 // ----- 音量（UIは0-15レベル。実際のM5音量 = レベル×16, レベル6=96）-----
 #define VOLUME_DEFAULT        6      // 0-15。6 → M5音量96相当
