@@ -1,4 +1,4 @@
-# CardputerRadiko
+# Cardputer-Adv-Radiko
 
 M5Stack **Cardputer ADV**（ESP32-S3 / ES8311）を、電源を入れるだけで [radiko](https://radiko.jp/) が聴ける **専用ラジオ受信機**にするファームウェアです。起動すると Wi-Fi 接続 → radiko 認証 → 自動再生。キーボードで選局・音量・Wi-Fi 設定ができます。
 
