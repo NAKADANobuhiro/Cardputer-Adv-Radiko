@@ -28,6 +28,8 @@ static int   g_sel   = 0;         // 選択カーソル
 static int   g_cur   = -1;        // 再生中の局index(-1=停止)
 static int   g_vol   = VOLUME_DEFAULT;
 static bool  g_wifiOk = false;
+static int   g_batLevel = -1;     // バッテリ残量(0-100, -1=不明)
+static bool  g_batChg   = false;  // 充電中フラグ
 
 // ---- 実行時の局リスト（既定 stations.h か、NVS保存の取得結果）----
 static char   g_stId[MAX_STATIONS][20];
@@ -188,8 +190,45 @@ static bool nowHHMM(char* out) {
 }
 
 // =============================================================================
+//  バッテリ残量（M5PM1 の電圧からの推定値）
+// =============================================================================
+static void refreshBattery() {
+  int32_t lv = M5Cardputer.Power.getBatteryLevel();       // 0-100, -1=不明
+  g_batLevel = (int)lv;
+  g_batChg   = (M5Cardputer.Power.isCharging() == M5Cardputer.Power.is_charging);
+}
+
+// ヘッダ右端に小さなバッテリアイコン(＋残量%)を描く。右端x座標を返す。
+static int drawBatteryIcon(int rightX, int y) {
+  auto& d = M5Cardputer.Display;
+  const int bw = 20, bh = 10;
+  int bx = rightX - bw - 2;            // 本体左端（-2はニブ分）
+  d.drawRect(bx, y, bw, bh, TFT_WHITE);
+  d.fillRect(bx + bw, y + 3, 2, bh - 6, TFT_WHITE);   // 右のニブ
+  int lvl = g_batLevel; if (lvl < 0) lvl = 0; if (lvl > 100) lvl = 100;
+  uint16_t col = g_batChg ? TFT_CYAN : (lvl > 50 ? TFT_GREEN : (lvl > 20 ? TFT_YELLOW : TFT_RED));
+  int fw = (bw - 2) * lvl / 100;
+  if (fw > 0) d.fillRect(bx + 1, y + 1, fw, bh - 2, col);
+  // 残量%（アイコンの左）。不明時は "--"
+  char pct[8];
+  if (g_batLevel < 0) snprintf(pct, sizeof(pct), "--");
+  else snprintf(pct, sizeof(pct), "%d%%", g_batLevel);
+  int pw = d.textWidth(pct);
+  int px = bx - 3 - pw;
+  d.setTextColor(TFT_WHITE);
+  d.setCursor(px, y - 1);
+  d.print(pct);
+  if (g_batChg) {                       // 充電中は小さな "+" を%の左に
+    d.setTextColor(TFT_CYAN);
+    d.setCursor(px - 8, y - 1);
+    d.print("+");
+  }
+  return px - (g_batChg ? 9 : 1);       // 音量描画の右限界
+}
+
+// =============================================================================
 //  画面描画（レイアウト）
-//    0- 16 : ヘッダ（WiFi/エリア/時刻/音量）
+//    0- 16 : ヘッダ（WiFi/エリア/時刻/音量/電池）
 //   16-100 : 局リスト
 //  100-118 : 番組バンド（再生中の番組名）
 //  118-135 : フッタ（状態 + キーヒント）
@@ -208,11 +247,15 @@ static void drawHeader() {
   d.setCursor(3, 3);
   d.print(left);
 
-  // 右: 音量
+  // 右端: バッテリアイコン(＋%)。その左限界を受け取り、音量を右詰めで描く。
+  int volRight = drawBatteryIcon(240 - 3, 3);
+
+  // 右: 音量（電池アイコンの左に右詰め）
   char vb[20];
   snprintf(vb, sizeof(vb), "Vol:%02d [-][+]", g_vol);
   int vw = d.textWidth(vb);
-  d.setCursor(240 - vw - 3, 3);
+  d.setTextColor(TFT_WHITE);
+  d.setCursor(volRight - vw - 4, 3);
   d.print(vb);
 }
 
@@ -297,7 +340,7 @@ static String lineEditor(const char* label, bool mask) {
     if (mask) { for (size_t i = 0; i < buf.length(); i++) d.print('*'); }
     else d.print(buf);
     d.setTextColor(TFT_DARKGREY); d.setCursor(4, 118);
-    d.print("Enter=確定  DEL=削除  `=中止");
+    d.print("Enter=確定  DEL=削除  ESC=中止");
 
     while (true) {
       M5Cardputer.update();
@@ -306,7 +349,7 @@ static String lineEditor(const char* label, bool mask) {
         if (st.enter) return buf;
         if (st.del && buf.length()) buf.remove(buf.length() - 1);
         for (auto c : st.word) {
-          if (c == '`') return String("\x01");
+          if (c == '`' || c == 0x1b) return String("\x01");   // ESC(`キー)=中止
           buf += c;
         }
         break;
@@ -341,7 +384,7 @@ static void areaSelectUI() {
     d.setTextSize(1);
     d.setTextColor(TFT_CYAN);
     d.setCursor(4, 2);
-    d.print("エリア選択  Enter=決定  `=中止");
+    d.print("エリア選択  Enter=決定  ESC=中止");
     const int rows = 8;
     int top = sel - rows / 2;
     if (top > PREF_COUNT - rows) top = PREF_COUNT - rows;
@@ -375,7 +418,7 @@ static void areaSelectUI() {
         if (st.del) return;                 // DEL でも中止
         bool handled = false;
         for (auto c : st.word) {
-          if (c == '`') return;             // 中止
+          if (c == '`' || c == 0x1b) return;   // ESC(`キー)=中止
           else if (c == ';') { if (sel > 0) sel--; handled = true; }
           else if (c == '.') { if (sel < PREF_COUNT - 1) sel++; handled = true; }
         }
@@ -467,6 +510,7 @@ void setup() {
 
   player::begin();
   M5Cardputer.Speaker.setVolume(VOLUME_TO_M5(g_vol));
+  refreshBattery();
 
   // 起動直後に先頭局を自動再生
   if (g_wifiOk && g_stCount > 0) {
@@ -537,11 +581,14 @@ void loop() {
     redraw();
     lastDraw = millis();
   } else if (millis() - lastDraw > 500) {
-    // 状態/時刻/音量/番組名 のいずれかが変わったときだけ細い帯を更新（チラつき防止）
+    // 状態/時刻/音量/番組名/電池 のいずれかが変わったときだけ細い帯を更新（チラつき防止）
+    static uint32_t lastBat = 0;
+    if (millis() - lastBat > 5000) { refreshBattery(); lastBat = millis(); }
     static String lastLine;
     char clk[6]; clk[0] = 0; nowHHMM(clk);
     String line = String(stateStr()) + "|" + player::area() + "|" + clk +
-                  "|" + String(g_vol) + "|" + player::program();
+                  "|" + String(g_vol) + "|" + player::program() +
+                  "|" + String(g_batLevel) + (g_batChg ? "C" : "");
     if (line != lastLine) { drawHeader(); drawProgram(); drawFooter(); lastLine = line; }
     lastDraw = millis();
   }

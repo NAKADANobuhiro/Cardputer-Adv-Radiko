@@ -4,6 +4,8 @@ M5Stack **Cardputer ADV**（ESP32-S3 / ES8311）を、電源を入れるだけ�
 
 > A firmware that turns the M5Stack Cardputer ADV into a standalone [radiko](https://radiko.jp/) internet-radio receiver. (radiko is a Japan-only service.)
 
+**リポジトリ**: https://github.com/NAKADANobuhiro/Cardputer-Adv-Radiko
+
 - **フレームワーク**: Arduino / PlatformIO（M5Cardputer ライブラリ）
 - **方式**: radiko 認証付き HLS(AAC) を取得 → Helix でデコード → ES8311 コーデックへ出力
 - **既定エリア**: 神奈川県（JP14）／**既定局**: TBSラジオ（どちらも変更可・後述）
@@ -17,6 +19,7 @@ M5Stack **Cardputer ADV**（ESP32-S3 / ES8311）を、電源を入れるだけ�
 - キーボードでの選局・音量（0〜15）・Wi-Fi 設定（本体に保存）
 - **現在放送中の番組名**を画面に表示（radiko の番組情報 API から取得）
 - **NTP 時計**（JST）を上段に表示
+- **バッテリ残量インジケーター**（アイコン＋%、充電中表示）を上段右に表示
 - **エリア設定を UI で選択**（`a` キー）。都道府県を選ぶとその地域の局リストを取り込み、本体に保存
 - 圧縮 AAC の先読みバッファ＋PCM リングバッファで安定再生
 - 無操作 1 分でバックライト自動消灯（音声は継続）の省電力
@@ -36,8 +39,8 @@ M5Stack **Cardputer ADV**（ESP32-S3 / ES8311）を、電源を入れるだけ�
 
 ```bash
 # 1) 取得
-git clone <this-repo-url>
-cd CardputerRadiko
+git clone https://github.com/NAKADANobuhiro/Cardputer-Adv-Radiko.git
+cd Cardputer-Adv-Radiko
 
 # 2) （任意）Wi-Fi 初期値を書く … 実機の w キーからでも設定可
 #    src/config.h の WIFI_SSID_DEFAULT / WIFI_PASS_DEFAULT
@@ -71,10 +74,12 @@ pio device monitor      # 115200 baud
 
 画面レイアウト:
 
-- **上段**: Wi-Fi 状態 / エリア / **時刻（NTP）** / 音量
+- **上段**: Wi-Fi 状態 / エリア / **時刻（NTP）** / 音量 / **バッテリ残量**
 - **中央**: 局リスト（`>` が再生中）
 - **番組バンド**: 再生中の局の**現在放送中の番組名**
 - **下段**: 状態（認証中/バッファ中/再生中/エラー）＋ キーヒント（`W:WiFi A:Area`）
+
+> バッテリ残量は M5PM1（電源管理IC）の電圧からの**推定値**です。負荷変動で数%前後します。充電中は水色＋`+`表示。
 
 ---
 
