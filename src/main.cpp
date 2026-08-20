@@ -29,7 +29,9 @@ static int   g_cur   = -1;        // 再生中の局index(-1=停止)
 static int   g_vol   = VOLUME_DEFAULT;
 static bool  g_wifiOk = false;
 static int   g_batLevel = -1;     // バッテリ残量(0-100, -1=不明)
-static bool  g_batChg   = false;  // 充電中フラグ
+static bool  g_batChg   = false;  // 充電中/USB給電中フラグ
+static int   g_battmv   = -1;     // 電池電圧(mV, CHG判定/診断用)
+static volatile uint32_t g_wifiDrops = 0;  // WiFi切断回数(ロードテスト用)
 
 // ---- 実行時の局リスト（既定 stations.h か、NVS保存の取得結果）----
 static char   g_stId[MAX_STATIONS][20];
@@ -195,7 +197,10 @@ static bool nowHHMM(char* out) {
 static void refreshBattery() {
   int32_t lv = M5Cardputer.Power.getBatteryLevel();       // 0-100, -1=不明
   g_batLevel = (int)lv;
-  g_batChg   = (M5Cardputer.Power.isCharging() == M5Cardputer.Power.is_charging);
+  // ※ Cardputer ADV は充電信号線が無く(isCharging=unknown, VBUS=-1)、電池をADC電圧で
+  //    読むだけ。そこで「電圧が高い=USB給電/満充電付近」を電圧しきい値で CHG とみなす。
+  g_battmv = M5Cardputer.Power.getBatteryVoltage();       // mV
+  g_batChg = (g_battmv >= BAT_CHG_MV);
 }
 
 // ヘッダ右端に小さなバッテリアイコン(＋残量%)を描く。右端x座標を返す。
@@ -208,22 +213,20 @@ static int drawBatteryIcon(int rightX, int y) {
   int lvl = g_batLevel; if (lvl < 0) lvl = 0; if (lvl > 100) lvl = 100;
   uint16_t col = g_batChg ? TFT_CYAN : (lvl > 50 ? TFT_GREEN : (lvl > 20 ? TFT_YELLOW : TFT_RED));
   int fw = (bw - 2) * lvl / 100;
+  if (g_batChg) fw = bw - 2;            // 充電中はアイコンを満充填で表示
   if (fw > 0) d.fillRect(bx + 1, y + 1, fw, bh - 2, col);
-  // 残量%（アイコンの左）。不明時は "--"
-  char pct[8];
-  if (g_batLevel < 0) snprintf(pct, sizeof(pct), "--");
-  else snprintf(pct, sizeof(pct), "%d%%", g_batLevel);
-  int pw = d.textWidth(pct);
+
+  // 充電中は % を出さず "CHG"。放電中は残量%（不明時は "--"）。アイコンの左に描く。
+  char lbl[8];
+  if (g_batChg)              snprintf(lbl, sizeof(lbl), "CHG");
+  else if (g_batLevel < 0)   snprintf(lbl, sizeof(lbl), "--");
+  else                       snprintf(lbl, sizeof(lbl), "%d%%", g_batLevel);
+  int pw = d.textWidth(lbl);
   int px = bx - 3 - pw;
-  d.setTextColor(TFT_WHITE);
+  d.setTextColor(g_batChg ? TFT_CYAN : TFT_WHITE);
   d.setCursor(px, y - 1);
-  d.print(pct);
-  if (g_batChg) {                       // 充電中は小さな "+" を%の左に
-    d.setTextColor(TFT_CYAN);
-    d.setCursor(px - 8, y - 1);
-    d.print("+");
-  }
-  return px - (g_batChg ? 9 : 1);       // 音量描画の右限界
+  d.print(lbl);
+  return px - 1;                         // 音量描画の右限界
 }
 
 // =============================================================================
@@ -340,7 +343,7 @@ static String lineEditor(const char* label, bool mask) {
     if (mask) { for (size_t i = 0; i < buf.length(); i++) d.print('*'); }
     else d.print(buf);
     d.setTextColor(TFT_DARKGREY); d.setCursor(4, 118);
-    d.print("Enter=確定  DEL=削除  ESC=中止");
+    d.print("Enter=確定 DEL=削除 Fn=_ ESC=中止");
 
     while (true) {
       M5Cardputer.update();
@@ -348,10 +351,13 @@ static String lineEditor(const char* label, bool mask) {
         auto st = M5Cardputer.Keyboard.keysState();
         if (st.enter) return buf;
         if (st.del && buf.length()) buf.remove(buf.length() - 1);
+        bool appended = false;
         for (auto c : st.word) {
           if (c == '`' || c == 0x1b) return String("\x01");   // ESC(`キー)=中止
-          buf += c;
+          buf += c; appended = true;
         }
+        // "_" は本来 Shift+"-"。入りにくい端末向けに Fn 単押しでも "_" を入力可能に。
+        if (!appended && st.fn) { buf += '_'; appended = true; }
         break;
       }
       delay(10);
@@ -433,6 +439,34 @@ static void areaSelectUI() {
 // =============================================================================
 //  Wi-Fi 接続 + NTP
 // =============================================================================
+// フォールバックDNS(8.8.8.8/1.1.1.1)とNTP(JST)を(再)設定。再接続時にも呼ぶ。
+static void applyFallbackDnsAndNtp() {
+  ip_addr_t d0, d1;
+  IP_ADDR4(&d0, 8, 8, 8, 8);
+  IP_ADDR4(&d1, 1, 1, 1, 1);
+  dns_setserver(0, &d0);
+  dns_setserver(1, &d1);
+  configTime(JST_OFFSET_SEC, 0, NTP_SERVER1, NTP_SERVER2);
+}
+
+// WiFiイベント: 切断を数え自動再接続、IP再取得時にDNS/NTPを再適用（長時間ソーク対策）。
+static void onWiFiEvent(WiFiEvent_t ev) {
+  switch (ev) {
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      g_wifiDrops++;
+      g_wifiOk = false;
+      WiFi.reconnect();
+      break;
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      g_wifiOk = true;
+      applyFallbackDnsAndNtp();
+      LOG("[wifi] got IP %s (drops=%u)\n",
+          WiFi.localIP().toString().c_str(), (unsigned)g_wifiDrops);
+      break;
+    default: break;
+  }
+}
+
 static bool connectWiFi() {
   String ssid = loadStr("ssid", WIFI_SSID_DEFAULT);
   String pass = loadStr("pass", WIFI_PASS_DEFAULT);
@@ -451,14 +485,7 @@ static bool connectWiFi() {
     M5Cardputer.update();
   }
   if (WiFi.status() == WL_CONNECTED) {
-    // フォールバックDNS(Google/Cloudflare)。ルーターのDNS不調対策。
-    ip_addr_t d0, d1;
-    IP_ADDR4(&d0, 8, 8, 8, 8);
-    IP_ADDR4(&d1, 1, 1, 1, 1);
-    dns_setserver(0, &d0);
-    dns_setserver(1, &d1);
-    // NTP（JST）。時刻はヘッダの時計表示に使用。
-    configTime(JST_OFFSET_SEC, 0, NTP_SERVER1, NTP_SERVER2);
+    applyFallbackDnsAndNtp();   // DNS(8.8.8.8/1.1.1.1)+NTP(JST)
     LOG("[wifi] IP=%s DNS=8.8.8.8/1.1.1.1 NTP=%s\n",
         WiFi.localIP().toString().c_str(), NTP_SERVER1);
     return true;
@@ -491,6 +518,9 @@ void setup() {
   }
 
   M5Cardputer.Speaker.setVolume(VOLUME_TO_M5(g_vol));
+
+  WiFi.onEvent(onWiFiEvent);        // 切断カウント/自動再接続/DNS・NTP再適用
+  WiFi.setAutoReconnect(true);
 
   g_wifiOk = connectWiFi();
   if (!g_wifiOk) {
@@ -568,6 +598,39 @@ void loop() {
                            dirty = true; }
       else if (c == 'a' || c == 'A') { areaSelectUI(); dirty = true; }
     }
+  }
+
+  // BtnGO(G0ボタン): Enter と同じ＝選択局を再生（消灯中は復帰専用）
+  if (M5Cardputer.BtnA.wasPressed()) {
+    lastActive = millis();
+    if (!screenOn) {
+      M5Cardputer.Display.setBrightness(DISPLAY_BRIGHTNESS);
+      screenOn = true;
+      redraw();
+      delay(15);
+      return;
+    }
+    if (g_stCount > 0) {
+      g_cur = g_sel;
+      player::play(g_stId[g_cur]);
+      dirty = true;
+    }
+  }
+
+  // ---- ロードテスト/ヒートラン用の健全性ログ（60秒ごと。消灯中も出力）----
+  static uint32_t lastHealth = 0;
+  if (millis() - lastHealth > 60000) {
+    lastHealth = millis();
+    refreshBattery();
+    uint32_t under = 0, starve = 0; player::stats(under, starve);
+    LOG("[health] up=%lus heap=%u min=%u temp=%.1fC rssi=%d wifi=%s drops=%u "
+        "state=%s under=%u starve=%u bat=%d%s batmv=%dmV\n",
+        (unsigned long)(millis() / 1000),
+        (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
+        temperatureRead(), (int)WiFi.RSSI(),
+        g_wifiOk ? "OK" : "NG", (unsigned)g_wifiDrops,
+        stateStr(), (unsigned)under, (unsigned)starve,
+        g_batLevel, g_batChg ? "+CHG" : "", g_battmv);
   }
 
   // 無操作でバックライト消灯（音声は継続）

@@ -278,8 +278,8 @@ static bool fetchNowTitle(const String& stationId, const String& area, uint32_t 
   cli.setInsecure();
   HTTPClient http;
   http.setReuse(false);
-  http.setTimeout(6000);
-  if (!http.begin(cli, url)) return false;
+  http.setTimeout(8000);
+  if (!http.begin(cli, url)) { LOG("[prog] begin fail\n"); return false; }
   int code = http.GET();
   if (code != 200) { LOG("[prog] HTTP %d\n", code); http.end(); return false; }
 
@@ -315,10 +315,11 @@ static bool fetchNowTitle(const String& stationId, const String& area, uint32_t 
       delay(3);
     }
     if (interrupted(gen)) { http.end(); return false; }
-    if (millis() - t0 > 6000) break;
+    if (millis() - t0 > 8000) break;
   }
   http.end();
   if (ok) tidyTitle(out);
+  else LOG("[prog] miss (station=%d)\n", inStation ? 1 : 0);
   return ok && out.length() > 0;
 }
 
@@ -399,8 +400,10 @@ static void playStation(const String& stationId, uint32_t gen) {
       if (fetchNowTitle(stationId, s_area, gen, t)) {
         setProgram(t);
         LOG("[prog] %s\n", t.c_str());
+        nextProg = millis() + PROG_REFRESH_MS;   // 成功: 次は通常間隔(5分)後
+      } else {
+        nextProg = millis() + PROG_RETRY_MS;     // 失敗: 短い間隔で再試行(取得中の放置を防ぐ)
       }
-      nextProg = millis() + PROG_REFRESH_MS;
       if (interrupted(gen)) break;
     }
     // 新セグメントが無い時だけ待つ（あれば即・上のFIFO空き待ちでペーシング）
@@ -546,6 +549,11 @@ void stop() {
 
 void releaseNetwork() {
   s_media.stop();          // メディアhostのTLSコンテキストを解放（約40KB）
+}
+
+void stats(uint32_t& spkUnder, uint32_t& fifoStarve) {
+  spkUnder   = s_spkUnder;
+  fifoStarve = s_fifoStarve;
 }
 
 State  state()   { return s_state; }

@@ -21,5 +21,6 @@ State  state();                        // 現在の状態
 String area();                         // 直近認証で判明したエリア(例 JP14)
 String message();                      // UI表示用の短いステータス/エラー文
 String program();                      // 現在放送中の番組名(取得できていれば)
+void   stats(uint32_t& spkUnder, uint32_t& fifoStarve);  // 診断カウンタ(ロードテスト用)
 
 } // namespace player
