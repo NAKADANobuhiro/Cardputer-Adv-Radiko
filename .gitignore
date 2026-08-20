@@ -17,3 +17,4 @@ Thumbs.db
 #  （既定では空。実機の w キー設定→本体NVS保存の運用を推奨）
 
 logs/
+Install-Launcher.md

@@ -26,6 +26,13 @@ static volatile bool  s_flush      = false;       // 局切替/停止でFIFOを�
 static volatile uint32_t s_spkUnder  = 0;   // スピーカーが空になった回数(=PCM枯れ)
 static volatile uint32_t s_fifoStarve= 0;   // FIFOが空でデコードが待たされた回数
 
+// ---- 認証トークン期限切れ/配信対象外の判別 ----
+//  一度でも再生できた後の403=トークン期限切れ(→再認証)。一度も再生できない403が
+//  続く場合のみ配信対象外(エリア外)とみなして諦める。
+static volatile bool s_playedSeg    = false; // 今回の再生開始後にセグメントを1本でも流したか
+static int           s_noPlayStreak = 0;     // 「認証したが1本も再生できず」の連続回数
+static volatile bool s_blocked      = false; // 配信対象外で停止中(新規play()まで再試行しない)
+
 // ---- 認証時のデコーダ解放協調（TLSハンドシェイクにメモリを譲る）----
 static volatile bool  s_wantIdle    = false; // (未使用)
 static volatile bool  s_decoderIdle = false; // (未使用)
@@ -347,8 +354,10 @@ static void playStation(const String& stationId, uint32_t gen) {
     if (chunkUrl.isEmpty()) {
       String body;
       int code = mediaGet(master, body);
-      if (code == 401) { s_token = ""; break; }                 // トークン期限切れ→再認証
-      if (code == 403) { setState(ERROR, "配信対象外"); delay(2000); break; } // エリア外等→再認証しない
+      if (code == 401 || code == 403) {   // トークン期限切れ/失効 → 再認証(playerTaskで判定)
+        LOG("[play] master HTTP %d -> reauth\n", code);
+        s_token = ""; break;
+      }
       if (code != 200) {
         if (++failStreak >= 5) { LOG("[play] master fail x%d code=%d\n", failStreak, code); break; }
         delay(300); continue;
@@ -360,8 +369,10 @@ static void playStation(const String& stationId, uint32_t gen) {
     // medialist を取得（短命。404になったら chunkUrl を捨てて次回マスター再取得）
     String pl;
     int code = mediaGet(chunkUrl, pl);
-    if (code == 401) { s_token = ""; break; }
-    if (code == 403) { setState(ERROR, "配信対象外"); delay(2000); break; }
+    if (code == 401 || code == 403) {   // トークン期限切れ/失効 → 再認証(playerTaskで判定)
+      LOG("[play] chunklist HTTP %d -> reauth\n", code);
+      s_token = ""; break;
+    }
     if (code != 200) {
       chunkUrl = "";        // 期限切れ等 → 次ループでマスターから取り直す
       if (++failStreak >= 5) { LOG("[play] chunklist fail x%d code=%d\n", failStreak, code); break; }
@@ -380,12 +391,20 @@ static void playStation(const String& stationId, uint32_t gen) {
       if (line.length() == 0 || line[0] == '#') continue;   // タグ/空行はスキップ
       String segUrl = resolveUrl(chunkUrl, line);
       if (idx > lastSeq) {
-        streamSegment(segUrl, gen);
-        lastSeq = idx;
-        played++;
+        bool okSeg = streamSegment(segUrl, gen);
+        for (int r = 0; !okSeg && r < SEG_RETRY && !interrupted(gen); r++) {
+          // 取得失敗(TLS -32512 等)。TLS文脈を解放(=その領域が空く)→整理を促し再確保。
+          s_media.stop();
+          delay(60);
+          okSeg = streamSegment(segUrl, gen);
+          if (okSeg) LOG("[seg] recovered on retry %d\n", r + 1);
+        }
+        lastSeq = idx;          // 短命セグメントなので、再試行しても駄目なら諦めて次へ
+        if (okSeg) played++;
       }
       idx++;
     }
+    if (played > 0) s_playedSeg = true;   // 1本でも流せた=このトークンで配信を受けられている
     LOG("[play] mseq=%ld played=%d fifo=%u under=%u starve=%u heap=%u\n", mseq, played,
         (unsigned)xStreamBufferBytesAvailable(s_fifo),
         (unsigned)s_spkUnder, (unsigned)s_fifoStarve, (unsigned)ESP.getFreeHeap());
@@ -460,6 +479,7 @@ static void playerTask(void* arg) {
     s_netParked = false;
 
     if (!s_playing) { setState(STOPPED); delay(80); continue; }
+    if (s_blocked)  { delay(200); continue; }  // 配信対象外: ERROR表示を保持し再試行しない
 
     uint32_t gen = s_gen;
     String station;
@@ -482,7 +502,23 @@ static void playerTask(void* arg) {
       s_token = tok; s_area = area;
     }
 
+    s_playedSeg = false;
     playStation(station, gen);
+
+    // playStation が 401/403 でトークンを破棄した = 再認証して再試行する。
+    //  ただし「再認証しても1本も再生できない」が連続する局はエリア配信対象外とみなし、
+    //  無限ループを避けて停止する（放送大学・NHK第2 等）。一度でも再生できていれば
+    //  期限切れ扱いで即再認証（連続カウントはリセット）。
+    if (s_playing && s_token.isEmpty()) {
+      if (s_playedSeg) {
+        s_noPlayStreak = 0;                    // 期限切れ: 再認証して継続
+      } else if (++s_noPlayStreak >= 3) {
+        setState(ERROR, "配信対象外");
+        s_blocked = true;                      // これ以上ループしない(新規play()まで保持)
+        s_noPlayStreak = 0;
+        LOG("[play] give up (area-restricted?)\n");
+      }
+    }
 
     // ループを抜けた=停止/切替/エラー。停止音のため軽くフラッシュ。
     if (!s_playing) M5Cardputer.Speaker.stop(SPK_CH);
@@ -536,6 +572,9 @@ void play(const String& stationId) {
   s_playing = true;
   s_program = "";          // 前局の番組名をクリア（新局で取り直す）
   portEXIT_CRITICAL(&s_mux);
+  s_noPlayStreak = 0;      // 局選択でリセット（配信対象外判定を新しく始める）
+  s_playedSeg = false;
+  s_blocked = false;       // 配信対象外ラッチを解除（新しい局で再挑戦）
   s_flush = true;          // 先読みFIFOを捨てて新局で貯め直す
 }
 
@@ -543,6 +582,7 @@ void stop() {
   s_playing = false;
   s_gen++;
   s_flush = true;          // 残りの先読みを破棄
+  s_blocked = false;       // 配信対象外ラッチも解除
   setProgram("");          // 番組名表示もクリア
   M5Cardputer.Speaker.stop();
 }
