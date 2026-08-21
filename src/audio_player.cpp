@@ -272,6 +272,8 @@ static void tidyTitle(String& s) {
   s.replace("&gt;", ">");
   s.replace("&quot;", "\"");
   s.replace("&#39;", "'");
+  // フォント(lgfxJapanGothic)に無い音符記号は空白へ（□=豆腐化を防ぐ）。radikoの番組名で多い。
+  s.replace("♪", " "); s.replace("♫", " "); s.replace("♬", " "); s.replace("♩", " ");
   s.trim();
 }
 

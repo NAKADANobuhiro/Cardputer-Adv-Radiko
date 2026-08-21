@@ -17,5 +17,12 @@ Thumbs.db
 #  （既定では空。実機の w キー設定→本体NVS保存の運用を推奨）
 
 logs/
+
+# 開発用の内部メモ（GitHub には公開しない。手元にのみ残す）
+CLAUDE.md
+DECISIONS.md
+Runbook.md
+NOTES.md
+
 Install-Launcher.md
 LogGuide.md
